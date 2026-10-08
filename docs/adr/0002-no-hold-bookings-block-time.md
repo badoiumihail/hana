@@ -1,0 +1,3 @@
+# No Hold: every non-declined, non-cancelled Booking blocks its time range
+
+There is no separate Hold concept. A Booking blocks its Staff Member's time from the moment it is created, whether it is requested, confirmed, completed or a No-show. Only declined and cancelled Bookings free their time. A Hold was considered for a hold-then-pay flow, but Hana takes no payments, and a requested Booking already does a Hold's job. No-shows keep blocking so that unmarking a No-show (the Customer turns up late) can never collide with a Booking made in the freed gap. This rule becomes a database constraint, so it is expensive to change later.
