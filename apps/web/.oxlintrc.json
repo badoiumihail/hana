@@ -1,0 +1,15 @@
+{
+	"extends": ["../../.oxlintrc.json"],
+	"env": {
+		"browser": true
+	},
+	"globals": {
+		"$props": "readonly",
+		"$state": "readonly",
+		"$derived": "readonly",
+		"$effect": "readonly",
+		"$bindable": "readonly",
+		"$inspect": "readonly",
+		"$host": "readonly"
+	}
+}
