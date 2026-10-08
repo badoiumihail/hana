@@ -1,0 +1,132 @@
+# Docker Compose describes a set of containers that run together, plus the
+# networks and volumes they share. `docker compose up -d` starts everything
+# defined here in the background; `docker compose down` stops and removes the
+# containers (named volumes, and so your data, survive unless you add `-v`).
+#
+# Compose automatically reads the `.env` file next to this one and substitutes
+# `${VAR}` references below with its values.
+
+# Project name. Prefixes every container, network and volume Docker creates
+# (e.g. the volume becomes `hana_pgdata`), so this project can't collide with
+# another project's resources on the same machine.
+name: hana
+
+# Each entry under `services` becomes one container (or several, if scaled).
+# The key (postgres, db-bootstrap, mailpit) is also the container's hostname
+# on the private network Compose creates for the project: other containers
+# reach Postgres at `postgres:5432`.
+services:
+  # ─── The database server ─────────────────────────────────────────────────
+  postgres:
+    # Which image to run, as `name:tag`. Tag `18` follows the latest 18.x
+    # release: minor updates (bug/security fixes) arrive on `docker compose
+    # pull`, a major upgrade never happens by accident.
+    image: postgres:18
+
+    # Environment variables set inside the container. The official postgres
+    # image reads these on first start to initialise the database.
+    environment:
+      # Password for the built-in `postgres` superuser. `:?message` makes
+      # Compose refuse to start if the variable is missing or empty, instead
+      # of silently passing an empty password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Name of the database created on first start.
+      POSTGRES_DB: hana
+
+    # Port publishing, as `host_ip:host_port:container_port`. Makes the
+    # container's port 5432 reachable from your machine at localhost:5432
+    # (for psql, DataGrip, and the API running via `pnpm dev:api`).
+    # The `127.0.0.1:` prefix restricts it to your machine only; without it,
+    # Docker listens on every network interface and bypasses the firewall.
+    ports:
+      - '127.0.0.1:5432:5432'
+
+    # Volumes keep data outside the container, so it survives the container
+    # being removed and recreated. `pgdata` is a named volume (declared at the
+    # bottom of this file, managed by Docker); `/var/lib/postgresql` is where
+    # it's mounted inside the container. Postgres 18 stores its files in
+    # `/var/lib/postgresql/18/docker` under this path; older guides mount
+    # `/var/lib/postgresql/data`, which is wrong for 18.
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+    # A command Docker runs periodically inside the container to decide
+    # whether it's "healthy". A started container isn't necessarily accepting
+    # connections yet; other services wait for healthy, not just started.
+    healthcheck:
+      # `pg_isready` exits 0 once the server accepts connections.
+      # CMD-SHELL means "run this string through a shell".
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d hana']
+      # Run the check every 2 seconds...
+      interval: 2s
+      # ...treat a check taking longer than 3 seconds as failed...
+      timeout: 3s
+      # ...and mark the container unhealthy after 15 consecutive failures.
+      retries: 15
+
+  # ─── One-shot job: creates roles and permissions, then exits ─────────────
+  db-bootstrap:
+    # Reuses the postgres image only because it contains the `psql` client;
+    # this container never runs a database server.
+    image: postgres:18
+
+    # Startup ordering. Don't start until the `postgres` service's
+    # healthcheck passes, so psql never races the server's startup.
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    # Standard libpq variables: psql reads these to know where and as whom
+    # to connect, so no credentials appear in the command below.
+    environment:
+      # Host to connect to: the postgres service's name on the Compose network.
+      PGHOST: postgres
+      # Connect as the superuser (creating roles requires it).
+      PGUSER: postgres
+      # Database to connect to.
+      PGDATABASE: hana
+      # Superuser password, from .env.
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+
+    # A bind mount: maps a file from your machine into the container, as
+    # `host_path:container_path:options`. `ro` = read-only, so the container
+    # can't modify your source file. Edits to the file apply on the next `up`
+    # without rebuilding anything.
+    volumes:
+      - ./infra/postgres/bootstrap.sql:/bootstrap.sql:ro
+
+    # The command the container runs instead of the image's default (which
+    # would start a Postgres server). `>` is YAML for "fold these lines into
+    # one line separated by spaces".
+    #   -v ON_ERROR_STOP=1   stop at the first failing statement and exit non-zero
+    #                        (otherwise psql carries on and reports success)
+    #   -v name=value        define psql variables, used in the SQL as :'name'
+    #   -f /bootstrap.sql    execute this file
+    command: >
+      psql -v ON_ERROR_STOP=1
+           -v migrator_password=${HANA_MIGRATOR_PASSWORD:?missing}
+           -v app_password=${HANA_APP_PASSWORD:?missing}
+           -f /bootstrap.sql
+
+    # Never restart after it exits: it's meant to run once per `up` and stop.
+    # Quoted because a bare `no` is a boolean in YAML.
+    restart: 'no'
+
+  # ─── Fake SMTP server that catches every email for local development ────
+  mailpit:
+    # Image from the `axllent` account on Docker Hub. No tag means `latest`,
+    # acceptable for a dev-only tool that stores nothing you care about.
+    image: axllent/mailpit
+    ports:
+      # Web UI for reading caught emails: http://localhost:8025
+      - '127.0.0.1:8025:8025'
+      # SMTP port the API sends mail to (localhost:1025 in host mode,
+      # mailpit:1025 from inside Compose).
+      - '127.0.0.1:1025:1025'
+
+# Named volumes referenced by services above. Docker creates and manages them
+# (`docker volume ls` shows `hana_pgdata`). Deleted only by
+# `docker compose down -v` or `docker volume rm`, which is what `pnpm db:reset`
+# relies on.
+volumes:
+  pgdata:
