@@ -14,7 +14,8 @@
 		"check": "pnpm --filter web check",
 		"test": "pnpm -r test",
 		"format": "prettier --write .",
-		"format:check": "prettier --check ."
+		"format:check": "prettier --check .",
+		"db:reset": "docker compose down -v && docker compose up -d"
 	},
 	"devDependencies": {
 		"oxlint": "^1.87.0",
